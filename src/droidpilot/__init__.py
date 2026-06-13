@@ -1,6 +1,7 @@
 """droidpilot — drive Android over ADB/UIAutomator, expose it to an agent via MCP."""
 from .adb import Adb, DeviceInfo, resolve_adb
 from .device import Device
+from .transport import AdbTransport, BeamTransport, Transport
 from .errors import (
     AdbNotFound,
     AssertionFailed,
@@ -14,6 +15,9 @@ __version__ = "0.1.0"
 
 __all__ = [
     "Device",
+    "Transport",
+    "AdbTransport",
+    "BeamTransport",
     "Adb",
     "DeviceInfo",
     "resolve_adb",

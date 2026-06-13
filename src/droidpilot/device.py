@@ -1,92 +1,58 @@
-"""High-level device control: launch, tap, type, swipe, screenshot, UI queries."""
+"""High-level device control, composed over a Transport (adb or Beam).
+
+The primitives (tap, type_text, screen_size, dump_xml, screenshot, …) come from
+the Transport; the high-level helpers (tap_text, wait_for_text, assert_text, …)
+are transport-agnostic and live here.
+"""
 from __future__ import annotations
 
-import re
 import time
 from typing import Callable
 
-from .adb import Adb, DeviceInfo
-from .errors import AssertionFailed, ElementNotFound
 from . import ui
+from .errors import AssertionFailed, ElementNotFound
+from .transport import AdbTransport, Transport
 from .ui import UiNode
-
-_SIZE_RE = re.compile(r"(\d+)x(\d+)")
-
-_KEY_ALIASES = {
-    "back": "KEYCODE_BACK",
-    "home": "KEYCODE_HOME",
-    "enter": "KEYCODE_ENTER",
-    "tab": "KEYCODE_TAB",
-    "delete": "KEYCODE_DEL",
-    "backspace": "KEYCODE_DEL",
-    "menu": "KEYCODE_MENU",
-    "search": "KEYCODE_SEARCH",
-    "power": "KEYCODE_POWER",
-    "volume_up": "KEYCODE_VOLUME_UP",
-    "volume_down": "KEYCODE_VOLUME_DOWN",
-    "app_switch": "KEYCODE_APP_SWITCH",
-}
-
-_SPECIAL = set("()&|;<>*?[]$`\"'\\#~")
-
-
-def _escape_text(text: str) -> str:
-    out: list[str] = []
-    for ch in text:
-        if ch == " ":
-            out.append("%s")
-        elif ch in _SPECIAL:
-            out.append("\\" + ch)
-        else:
-            out.append(ch)
-    return "".join(out)
 
 
 class Device:
-    """A connected Android device. All actions go through adb."""
-
-    def __init__(self, serial: str | None = None, adb_path: str | None = None):
-        self.adb = Adb(serial=serial, adb_path=adb_path)
+    def __init__(
+        self,
+        serial: str | None = None,
+        adb_path: str | None = None,
+        transport: Transport | None = None,
+    ):
+        self.t: Transport = transport or AdbTransport(serial=serial, adb_path=adb_path)
         self._size: tuple[int, int] | None = None
 
-    def connect(self) -> DeviceInfo:
-        info = self.adb.require_device()
-        return info
+    @property
+    def transport(self) -> Transport:
+        return self.t
 
-    # --- info ---------------------------------------------------------------
+    def connect(self) -> object:
+        return self.t.connect()
+
+    # --- info ---
     def screen_size(self) -> tuple[int, int]:
         if self._size is None:
-            out = self.adb.shell("wm size")
-            # "Physical size: 1080x2400" (and maybe an Override size line)
-            m = _SIZE_RE.search(out.split("Override size:")[-1] if "Override" in out else out)
-            self._size = (int(m.group(1)), int(m.group(2))) if m else (1080, 1920)
+            self._size = self.t.screen_size()
         return self._size
 
-    def current_app(self) -> str:
-        """Best-effort foreground package name."""
-        out = self.adb.shell(
-            "dumpsys activity activities | grep -E 'mResumedActivity|ResumedActivity' | head -1"
-        )
-        m = re.search(r"\s([a-zA-Z0-9_.]+)/", out)
-        return m.group(1) if m else ""
-
-    # --- actions ------------------------------------------------------------
+    # --- actions (delegate to transport) ---
     def launch_app(self, package: str) -> None:
-        self.adb.shell(
-            f"monkey -p {package} -c android.intent.category.LAUNCHER 1"
-        )
+        self.t.launch_app(package)
 
     def stop_app(self, package: str) -> None:
-        self.adb.shell(f"am force-stop {package}")
+        self.t.stop_app(package)
 
     def tap(self, x: int, y: int) -> None:
-        self.adb.shell(f"input tap {int(x)} {int(y)}")
+        self.t.tap(x, y)
 
     def long_press(self, x: int, y: int, duration_ms: int = 600) -> None:
-        self.adb.shell(f"input swipe {int(x)} {int(y)} {int(x)} {int(y)} {duration_ms}")
+        self.t.swipe(x, y, x, y, duration_ms)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
-        self.adb.shell(f"input swipe {int(x1)} {int(y1)} {int(x2)} {int(y2)} {duration_ms}")
+        self.t.swipe(x1, y1, x2, y2, duration_ms)
 
     def swipe_dir(self, direction: str, duration_ms: int = 300) -> None:
         w, h = self.screen_size()
@@ -100,37 +66,33 @@ class Device:
         }
         if direction not in moves:
             raise ValueError(f"direction must be up/down/left/right, got {direction!r}")
-        self.swipe(*moves[direction], duration_ms=duration_ms)
+        self.t.swipe(*moves[direction], duration_ms=duration_ms)
 
     def type_text(self, text: str) -> None:
-        self.adb.shell(f"input text {_escape_text(text)}")
+        self.t.type_text(text)
 
     def press_key(self, key: str) -> None:
-        code = _KEY_ALIASES.get(key.lower(), key)
-        self.adb.shell(f"input keyevent {code}")
+        self.t.press_key(key)
 
     def back(self) -> None:
-        self.press_key("back")
+        self.t.press_key("back")
 
     def home(self) -> None:
-        self.press_key("home")
+        self.t.press_key("home")
 
     def enter(self) -> None:
-        self.press_key("enter")
+        self.t.press_key("enter")
 
-    # --- vision -------------------------------------------------------------
+    # --- vision ---
     def screenshot(self, path: str | None = None) -> bytes:
-        data = self.adb.exec_out("screencap -p")
+        data = self.t.screenshot()
         if path:
             with open(path, "wb") as f:
                 f.write(data)
         return data
 
     def dump_xml(self) -> str:
-        # Dump to a file on the device, then read it back (most reliable path).
-        self.adb.shell("uiautomator dump /sdcard/dp_dump.xml >/dev/null 2>&1 || uiautomator dump")
-        raw = self.adb.exec_out("cat /sdcard/dp_dump.xml")
-        return raw.decode("utf-8", "replace")
+        return self.t.dump_xml()
 
     def dump_ui(self) -> UiNode:
         return ui.parse_hierarchy(self.dump_xml())
@@ -138,7 +100,7 @@ class Device:
     def screen_summary(self, max_nodes: int = 80) -> str:
         return ui.summarize(self.dump_ui(), max_nodes=max_nodes)
 
-    # --- queries / waits ----------------------------------------------------
+    # --- queries / waits ---
     def find(self, pred: Callable[[UiNode], bool]) -> UiNode | None:
         return self.dump_ui().find(pred)
 
@@ -150,29 +112,26 @@ class Device:
         if node is None:
             raise ElementNotFound(f"No element matching text {text!r}")
         x, y = node.center
-        self.tap(x, y)
+        self.t.tap(x, y)
         return node
 
     def wait_for(
-        self,
-        pred: Callable[[UiNode], bool],
-        timeout: float = 10.0,
-        interval: float = 0.5,
+        self, pred: Callable[[UiNode], bool], timeout: float = 10.0, interval: float = 0.5
     ) -> UiNode:
         deadline = time.monotonic() + timeout
         last_exc: Exception | None = None
         while time.monotonic() < deadline:
             try:
                 node = self.dump_ui().find(pred)
-            except Exception as e:  # transient dump failure during transitions
+            except Exception as e:
                 last_exc = e
                 node = None
             if node is not None:
                 return node
             time.sleep(interval)
-        if last_exc:
-            raise ElementNotFound(f"Element not found within {timeout}s ({last_exc})")
-        raise ElementNotFound(f"Element not found within {timeout}s")
+        raise ElementNotFound(
+            f"Element not found within {timeout}s" + (f" ({last_exc})" if last_exc else "")
+        )
 
     def wait_for_text(self, text: str, timeout: float = 10.0, exact: bool = False) -> UiNode:
         return self.wait_for(ui.by_text(text, exact=exact), timeout=timeout)

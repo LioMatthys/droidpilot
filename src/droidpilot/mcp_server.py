@@ -3,10 +3,13 @@ can call to run user tests. Transport is stdio (Claude Code launches it).
 """
 from __future__ import annotations
 
+import os
+
 from mcp.server.fastmcp import FastMCP, Image
 
+from .adb import Adb
 from .device import Device
-from .errors import DroidPilotError
+from .transport import BeamTransport
 
 mcp = FastMCP(
     "droidpilot",
@@ -22,19 +25,35 @@ mcp = FastMCP(
 _device: Device | None = None
 
 
+def _make_device() -> Device:
+    """Pick the backend. Set DROIDPILOT_BEAM=host:port (or '1' for the default
+    127.0.0.1:8788 relay) to drive the phone over the wireless Beam link instead
+    of adb."""
+    beam = os.environ.get("DROIDPILOT_BEAM")
+    if beam:
+        host, _, port = beam.partition(":")
+        return Device(
+            transport=BeamTransport(
+                host=host if host and host != "1" else "127.0.0.1",
+                port=int(port) if port else BeamTransport.DEFAULT_PORT,
+            )
+        )
+    return Device()
+
+
 def _dev() -> Device:
     """Return a connected Device, (re)validating the connection each call."""
     global _device
     if _device is None:
-        _device = Device()
-    _device.connect()  # raises a clear NoDeviceError if not ready
+        _device = _make_device()
+    _device.connect()  # raises a clear error if not reachable
     return _device
 
 
 @mcp.tool()
 def list_devices() -> str:
-    """List connected Android devices and their state (device/unauthorized/offline)."""
-    devices = Device().adb.list_devices()
+    """List USB/adb-connected Android devices and their state (device/unauthorized/offline)."""
+    devices = Adb().list_devices()
     if not devices:
         return "No devices connected. Plug in the phone and enable USB debugging."
     return "\n".join(

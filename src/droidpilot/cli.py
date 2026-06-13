@@ -4,13 +4,19 @@ from __future__ import annotations
 import argparse
 import sys
 
+from .adb import Adb
 from .device import Device
 from .errors import DroidPilotError
+from .transport import BeamTransport
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="droidpilot", description="Drive an Android device.")
-    p.add_argument("-s", "--serial", help="target device serial")
+    p.add_argument("-s", "--serial", help="target device serial (adb backend)")
+    p.add_argument(
+        "-b", "--beam", nargs="?", const="127.0.0.1:8788", metavar="HOST:PORT",
+        help="drive over the wireless Beam relay instead of adb (default 127.0.0.1:8788)",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("devices", help="list connected devices")
@@ -29,11 +35,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.cmd == "devices":
-            for d in Device(serial=args.serial).adb.list_devices():
+            for d in Adb(serial=args.serial).list_devices():
                 print(f"{d.serial}\t{d.state}\t{d.model or ''}")
             return 0
 
-        dev = Device(serial=args.serial)
+        if args.beam:
+            host, _, port = args.beam.partition(":")
+            dev = Device(transport=BeamTransport(host=host or "127.0.0.1", port=int(port) if port else 8788))
+        else:
+            dev = Device(serial=args.serial)
         dev.connect()
 
         if args.cmd == "launch":
