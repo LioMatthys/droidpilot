@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "droidpilot"
+version = "0.1.0"
+description = "Drive an Android phone over ADB/UIAutomator and expose it to an AI agent over MCP — Playwright-style, for native app user testing."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "LioMatthys" }]
+keywords = ["android", "adb", "uiautomator", "mcp", "testing", "automation", "agent"]
+dependencies = [
+  "mcp>=1.2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+droidpilot = "droidpilot.cli:main"
+droidpilot-mcp = "droidpilot.mcp_server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/droidpilot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
