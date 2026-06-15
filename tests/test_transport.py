@@ -41,8 +41,12 @@ class FakeRelay:
                 op = req["op"]
                 if op == "screen_size":
                     result = {"width": 1080, "height": 2400}
-                elif op in ("tap", "swipe", "back", "home"):
+                elif op in ("tap", "swipe", "back", "home", "type_text", "long_press"):
                     result = None
+                elif op == "scroll_to_element":
+                    result = {"found": True, "bounds": [40, 2200, 200, 2280]}
+                elif op == "wait_for_text":
+                    result = {"found": True}
                 elif op == "dump":
                     result = {
                         "nodes": [
@@ -143,7 +147,6 @@ def test_beam_transport_local_unsupported_ops():
     t = BeamTransport(host="127.0.0.1", port=1)  # no connect; these raise locally
     for call in (
         t.screenshot,
-        lambda: t.type_text("hi"),
         lambda: t.launch_app("com.x"),
         lambda: t.stop_app("com.x"),
         lambda: t.press_key("enter"),

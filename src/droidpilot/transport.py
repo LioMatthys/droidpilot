@@ -192,15 +192,30 @@ class BeamTransport:
         parts.append("</hierarchy>")
         return "\n".join(parts)
 
+    # --- additional control ops ---
+    def type_text(self, text: str) -> None:
+        """Inject text into the currently focused input field."""
+        self._rpc("type_text", {"text": text})
+
+    def long_press(self, x: int, y: int, duration_ms: int = 500) -> None:
+        """Hold down a touch for a duration (for context menus, drag-to-select)."""
+        self._rpc("long_press", {"x": int(x), "y": int(y), "durationMs": int(duration_ms)})
+
+    def scroll_to_element(self, text: str, exact: bool = False) -> dict:
+        """Find an element by text and scroll into view. Returns its bounds."""
+        return self._rpc("scroll_to_element", {"text": text, "exact": exact})
+
+    def wait_for_text(self, text: str, timeout_ms: int = 5000, exact: bool = False) -> bool:
+        """Wait until text appears on screen. Returns True if found, raises if timeout."""
+        self._rpc("wait_for_text", {"text": text, "exact": exact, "timeoutMs": timeout_ms})
+        return True
+
     # --- not exposed by the on-phone executor (use the adb transport for these) ---
     def launch_app(self, package: str) -> None:
         raise DroidPilotError("launch_app is not available over Beam (use the adb transport).")
 
     def stop_app(self, package: str) -> None:
         raise DroidPilotError("stop_app is not available over Beam (use the adb transport).")
-
-    def type_text(self, text: str) -> None:
-        raise DroidPilotError("type_text is not available over Beam yet.")
 
     def screenshot(self) -> bytes:
         raise DroidPilotError("screenshot not available over Beam (use the live cast).")
