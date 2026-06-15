@@ -218,7 +218,15 @@ class BeamTransport:
         raise DroidPilotError("stop_app is not available over Beam (use the adb transport).")
 
     def screenshot(self) -> bytes:
-        raise DroidPilotError("screenshot not available over Beam (use the live cast).")
+        """Capture the screen via the phone's AccessibilityService (returns PNG bytes).
+        Works when the element tree is empty, so it's the vision fallback for agents."""
+        import base64
+
+        result = self._rpc("screenshot") or {}
+        png_b64 = result.get("png")
+        if not png_b64:
+            raise DroidPilotError("screenshot returned no image")
+        return base64.b64decode(png_b64)
 
     def close(self) -> None:
         if self._sock:

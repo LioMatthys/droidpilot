@@ -47,6 +47,11 @@ class FakeRelay:
                     result = {"found": True, "bounds": [40, 2200, 200, 2280]}
                 elif op == "wait_for_text":
                     result = {"found": True}
+                elif op == "screenshot":
+                    # a valid 1x1 transparent PNG
+                    result = {
+                        "png": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+                    }
                 elif op == "dump":
                     result = {
                         "nodes": [
@@ -133,6 +138,18 @@ def test_beam_transport_dump_xml_is_parseable():
     relay.close()
 
 
+def test_beam_transport_screenshot_returns_png_bytes():
+    relay = FakeRelay()
+    t = BeamTransport(host="127.0.0.1", port=relay.port)
+    t.connect()
+    img = t.screenshot()
+    t.close()
+    relay.thread.join(timeout=2)
+    assert isinstance(img, bytes)
+    assert img.startswith(b"\x89PNG")  # decoded from base64 to a real PNG
+    relay.close()
+
+
 def test_beam_transport_surfaces_phone_error():
     relay = FakeRelay()
     t = BeamTransport(host="127.0.0.1", port=relay.port)
@@ -146,7 +163,6 @@ def test_beam_transport_surfaces_phone_error():
 def test_beam_transport_local_unsupported_ops():
     t = BeamTransport(host="127.0.0.1", port=1)  # no connect; these raise locally
     for call in (
-        t.screenshot,
         lambda: t.launch_app("com.x"),
         lambda: t.stop_app("com.x"),
         lambda: t.press_key("enter"),

@@ -100,6 +100,22 @@ class Device:
     def screen_summary(self, max_nodes: int = 80) -> str:
         return ui.summarize(self.dump_ui(), max_nodes=max_nodes)
 
+    def read_screen(self, max_nodes: int = 80) -> dict:
+        """Read the screen, preferring the element tree. Falls back to a screenshot
+        (PNG bytes) when the accessibility tree is empty (games, WebViews, custom
+        canvases), so a vision-capable agent can still see what's on screen.
+
+        Returns {"mode": "elements", "summary": str} or {"mode": "image", "png": bytes}.
+        """
+        try:
+            root = self.dump_ui()
+            has_labeled = any(n.text or n.content_desc or n.clickable for n in root.walk())
+        except Exception:
+            has_labeled = False
+        if has_labeled:
+            return {"mode": "elements", "summary": ui.summarize(root, max_nodes=max_nodes)}
+        return {"mode": "image", "png": self.screenshot()}
+
     # --- queries / waits ---
     def find(self, pred: Callable[[UiNode], bool]) -> UiNode | None:
         return self.dump_ui().find(pred)
