@@ -144,7 +144,7 @@ class BeamTransport:
         line, _, self._buf = self._buf.partition(b"\n")
         return line.decode("utf-8", "replace")
 
-    # --- MVP ops ---
+    # --- ops implemented by the on-phone AccessibilityService executor ---
     def screen_size(self) -> tuple[int, int]:
         r = self._rpc("screen_size")
         return (int(r["width"]), int(r["height"]))
@@ -152,27 +152,58 @@ class BeamTransport:
     def tap(self, x: int, y: int) -> None:
         self._rpc("tap", {"x": int(x), "y": int(y)})
 
-    # --- not in the MVP yet (grow as the on-phone executor gains ops) ---
-    def launch_app(self, package: str) -> None:
-        self._rpc("launch_app", {"package": package})
-
-    def stop_app(self, package: str) -> None:
-        self._rpc("stop_app", {"package": package})
-
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
-        self._rpc("swipe", {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "duration_ms": duration_ms})
-
-    def type_text(self, text: str) -> None:
-        self._rpc("type_text", {"text": text})
+        # The on-phone executor reads `durationMs` (camelCase).
+        self._rpc(
+            "swipe",
+            {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2), "durationMs": int(duration_ms)},
+        )
 
     def press_key(self, key: str) -> None:
-        self._rpc("press_key", {"key": key})
+        k = key.lower()
+        if k in ("back", "home"):
+            self._rpc(k)  # dedicated global-action ops on the phone
+        else:
+            raise DroidPilotError(f"press_key {key!r} not supported over Beam (only back/home).")
 
     def dump_xml(self) -> str:
-        raise DroidPilotError("dump_xml not available over Beam yet (coming in control v1).")
+        """Synthesize a UIAutomator-style hierarchy from the phone's `dump` op, so the
+        transport-agnostic helpers (find_by_text, tap_text, screen_summary, wait_for_text)
+        work unchanged over Beam — all wireless, no adb."""
+        from xml.sax.saxutils import quoteattr
+
+        result = self._rpc("dump") or {}
+        parts = ["<?xml version='1.0' encoding='UTF-8'?>", "<hierarchy rotation='0'>"]
+        for n in result.get("nodes", []):
+            b = n.get("bounds") or [0, 0, 0, 0]
+            if len(b) != 4:
+                continue
+            attrs = {
+                "text": n.get("text", ""),
+                "content-desc": n.get("desc", ""),
+                "resource-id": n.get("id", ""),
+                "class": n.get("cls", ""),
+                "clickable": "true" if n.get("clickable") else "false",
+                "scrollable": "true" if n.get("scrollable") else "false",
+                "bounds": f"[{b[0]},{b[1]}][{b[2]},{b[3]}]",
+            }
+            attr_str = " ".join(f"{k}={quoteattr(str(v))}" for k, v in attrs.items())
+            parts.append(f"<node {attr_str} />")
+        parts.append("</hierarchy>")
+        return "\n".join(parts)
+
+    # --- not exposed by the on-phone executor (use the adb transport for these) ---
+    def launch_app(self, package: str) -> None:
+        raise DroidPilotError("launch_app is not available over Beam (use the adb transport).")
+
+    def stop_app(self, package: str) -> None:
+        raise DroidPilotError("stop_app is not available over Beam (use the adb transport).")
+
+    def type_text(self, text: str) -> None:
+        raise DroidPilotError("type_text is not available over Beam yet.")
 
     def screenshot(self) -> bytes:
-        raise DroidPilotError("screenshot not available over Beam yet (use the live cast).")
+        raise DroidPilotError("screenshot not available over Beam (use the live cast).")
 
     def close(self) -> None:
         if self._sock:

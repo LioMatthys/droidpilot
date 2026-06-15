@@ -6,6 +6,7 @@ import threading
 
 import pytest
 
+from droidpilot import ui
 from droidpilot.errors import DroidPilotError
 from droidpilot.transport import BeamTransport
 
@@ -39,12 +40,32 @@ class FakeRelay:
                 self.requests.append(req)
                 op = req["op"]
                 if op == "screen_size":
-                    resp = {"id": req["id"], "ok": True, "result": {"width": 1080, "height": 2400}}
-                elif op == "tap":
-                    resp = {"id": req["id"], "ok": True, "result": None}
+                    result = {"width": 1080, "height": 2400}
+                elif op in ("tap", "swipe", "back", "home"):
+                    result = None
+                elif op == "dump":
+                    result = {
+                        "nodes": [
+                            {
+                                "text": "Settings",
+                                "cls": "android.widget.TextView",
+                                "clickable": True,
+                                "bounds": [40, 2200, 200, 2280],
+                            },
+                            {
+                                "desc": "Start sharing",
+                                "cls": "android.widget.Button",
+                                "clickable": True,
+                                "bounds": [100, 1000, 980, 1120],
+                            },
+                        ]
+                    }
                 else:
-                    resp = {"id": req["id"], "ok": False, "error": f"unknown op {op}"}
-                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                    conn.sendall(
+                        (json.dumps({"id": req["id"], "ok": False, "error": f"unknown op {op}"}) + "\n").encode()
+                    )
+                    continue
+                conn.sendall((json.dumps({"id": req["id"], "ok": True, "result": result}) + "\n").encode())
 
     def close(self):
         try:
@@ -71,19 +92,61 @@ def test_beam_transport_screen_size_and_tap():
     relay.close()
 
 
+def test_beam_transport_swipe_and_keys_wire():
+    relay = FakeRelay()
+    t = BeamTransport(host="127.0.0.1", port=relay.port)
+    t.connect()
+    t.swipe(10, 20, 30, 40, duration_ms=200)
+    t.press_key("back")
+    t.press_key("home")
+    t.close()
+    relay.thread.join(timeout=2)
+
+    assert relay.requests[0]["op"] == "swipe"
+    # the on-phone executor reads camelCase durationMs
+    assert relay.requests[0]["args"] == {"x1": 10, "y1": 20, "x2": 30, "y2": 40, "durationMs": 200}
+    assert relay.requests[1]["op"] == "back"
+    assert relay.requests[2]["op"] == "home"
+    relay.close()
+
+
+def test_beam_transport_dump_xml_is_parseable():
+    relay = FakeRelay()
+    t = BeamTransport(host="127.0.0.1", port=relay.port)
+    t.connect()
+    xml = t.dump_xml()
+    t.close()
+    relay.thread.join(timeout=2)
+
+    # The synthesized XML must parse with the same UIAutomator parser adb uses,
+    # and elements must be findable by text/desc with correct centers.
+    root = ui.parse_hierarchy(xml)
+    settings = root.find(ui.by_text("Settings"))
+    assert settings is not None
+    assert settings.center == (120, 2240)
+    assert settings.clickable is True
+    assert root.find(ui.by_desc("Start sharing")) is not None
+    relay.close()
+
+
 def test_beam_transport_surfaces_phone_error():
     relay = FakeRelay()
     t = BeamTransport(host="127.0.0.1", port=relay.port)
     t.connect()
     with pytest.raises(DroidPilotError):
-        t.launch_app("com.nope")  # FakeRelay replies ok:false for unknown op
+        t._rpc("totally_unknown_op")  # FakeRelay replies ok:false
     t.close()
     relay.close()
 
 
 def test_beam_transport_local_unsupported_ops():
-    t = BeamTransport(host="127.0.0.1", port=1)  # no connect needed; raises locally
-    with pytest.raises(DroidPilotError):
-        t.dump_xml()
-    with pytest.raises(DroidPilotError):
-        t.screenshot()
+    t = BeamTransport(host="127.0.0.1", port=1)  # no connect; these raise locally
+    for call in (
+        t.screenshot,
+        lambda: t.type_text("hi"),
+        lambda: t.launch_app("com.x"),
+        lambda: t.stop_app("com.x"),
+        lambda: t.press_key("enter"),
+    ):
+        with pytest.raises(DroidPilotError):
+            call()
